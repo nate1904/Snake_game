@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Teno Slither PRO - Multiplayer</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #050508; font-family: 'Segoe UI', sans-serif; touch-action: none; }
+        canvas { display: block; transition: filter 0.5s ease; }
+        .dead-blur { filter: blur(8px) brightness(0.5); }
+
+        /* Login Screen */
+        #game-ui { position: fixed; inset: 0; background: rgba(5,5,8,0.95); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; }
+        .loader { width: 50px; height: 50px; border: 5px solid #111; border-top-color: #00eeff; border-radius: 50%; animation: spin 1s infinite linear; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #login-form { text-align: center; display: none; }
+        input { background: rgba(255,255,255,0.05); border: 2px solid #00eeff; color: white; padding: 12px; border-radius: 8px; margin-bottom: 15px; width: 200px; outline: none; }
+        
+        /* Buttons */
+        button { background: #00eeff; border: none; padding: 12px 25px; border-radius: 25px; cursor: pointer; font-weight: bold; color: #000; transition: 0.3s; }
+        button:hover { transform: scale(1.05); background: #70f3ff; }
+        .btn-alt { background: #444; color: white; margin-left: 10px; }
+
+        /* In-Game UI */
+        .ui-overlay { position: fixed; top: 20px; left: 20px; color: white; pointer-events: none; z-index: 10; }
+        #leaderboard { margin-top: 10px; background: rgba(0,0,0,0.6); padding: 15px; border-radius: 10px; border: 1px solid rgba(0,238,255,0.2); font-size: 14px; min-width: 150px; }
+        
+        /* Death Screen */
+        #gameOver { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.85); color: white; padding: 40px; border-radius: 20px; display: none; text-align: center; z-index: 101; border: 2px solid #00eeff; }
+    </style>
+</head>
+<body>
+
+<div id="game-ui">
+    <div id="loader" class="loader"></div>
+    <div id="login-form">
+        <h1 style="color: #00eeff; letter-spacing: 5px;">TENO SLITHER PRO</h1>
+        <input type="text" id="nickname" placeholder="NICKNAME" maxlength="12"><br>
+        <button onclick="join()">START MULTIPLAYER</button>
+    </div>
+</div>
+
+<div id="gameOver">
+    <h1 style="color: #00eeff">ELIMINATED</h1>
+    <p id="finalScoreText">Score: 0</p>
+    <button onclick="respawn()">RESPAWN</button>
+    <button class="btn-alt" onclick="spectate()">SPECTATE</button>
+</div>
+
+<div class="ui-overlay">
+    <div style="font-size: 28px; font-weight: bold; color: #00eeff;">Score: <span id="score">0</span></div>
+    <div id="leaderboard"><b>LEADERBOARD</b></div>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+    const socket = io('https://snake-game-095q.onrender.com');
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    
+    let world = { players: {}, foods: [] };
+    let mousePos = { x: 0, y: 0 }, boosting = false;
+    let isDead = false, isSpectating = false;
+    let camera = { x: 2500, y: 2500 };
+    const WORLD_RADIUS = 2500;
+
+    socket.on('connect', () => {
+        document.getElementById('loader').style.display = 'none';
+        document.getElementById('login-form').style.display = 'block';
+    });
+
+    socket.on('update', (data) => { 
+        world = data; 
+        // If we were alive but now our ID is missing from players, we died
+        if (!isDead && !isSpectating && !world.players[socket.id] && document.getElementById('game-ui').style.display === 'none') {
+            triggerDeath();
+        }
+    });
+
+    function join() {
+        const name = document.getElementById('nickname').value || "Guest";
+        socket.emit('init', { name: name, color: '#00eeff' });
+        document.getElementById('game-ui').style.display = 'none';
+        isDead = false; isSpectating = false;
+        canvas.classList.remove('dead-blur');
+    }
+
+    function triggerDeath() {
+        isDead = true;
+        canvas.classList.add('dead-blur');
+        document.getElementById('finalScoreText').innerText = "Final Score: " + document.getElementById('score').innerText;
+        document.getElementById('gameOver').style.display = 'block';
+    }
+
+    function respawn() {
+        document.getElementById('gameOver').style.display = 'none';
+        join();
+    }
+
+    function spectate() {
+        document.getElementById('gameOver').style.display = 'none';
+        isSpectating = true;
+        canvas.classList.remove('dead-blur');
+    }
+
+    function drawMiniMap() {
+        const size = 150;
+        const x = window.innerWidth - 170, y = window.innerHeight - 170;
+        ctx.save();
+        ctx.translate(x + size/2, y + size/2);
+        
+        // Background
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.beginPath(); ctx.arc(0, 0, size/2, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = "#00eeff"; ctx.stroke();
+
+        // Dots for players
+        Object.values(world.players).forEach(p => {
+            const dotX = ((p.body[0].x - 2500) / 2500) * (size/2);
+            const dotY = ((p.body[0].y - 2500) / 2500) * (size/2);
+            ctx.fillStyle = (p.id === socket.id) ? "white" : p.color;
+            ctx.beginPath(); ctx.arc(dotX, dotY, 2, 0, Math.PI*2); ctx.fill();
+        });
+        ctx.restore();
+    }
+
+    function loop() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        let me = world.players[socket.id];
+        
+        // If spectating or dead, follow the leader
+        if (!me) {
+            let playersArray = Object.values(world.players);
+            if (playersArray.length > 0) {
+                playersArray.sort((a,b) => b.score - a.score);
+                me = playersArray[0]; 
+            }
+        }
+
+        if (me) {
+            camera.x = me.body[0].x;
+            camera.y = me.body[0].y;
+
+            ctx.save();
+            ctx.translate(canvas.width/2 - camera.x, canvas.height/2 - camera.y);
+
+            // Draw Grid
+            ctx.strokeStyle = "#12121a";
+            for(let i=0; i<=5000; i+=250) {
+                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 5000); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(5000, i); ctx.stroke();
+            }
+
+            // Draw Death Border
+            ctx.strokeStyle = "#ff2255"; ctx.lineWidth = 10;
+            ctx.beginPath(); ctx.arc(2500, 2500, 2500, 0, Math.PI*2); ctx.stroke();
+
+            // Draw Food
+            world.foods.forEach(f => {
+                ctx.fillStyle = f.color;
+                ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, Math.PI*2); ctx.fill();
+            });
+
+            // Draw All Players
+            Object.values(world.players).forEach(p => {
+                ctx.fillStyle = p.color;
+                p.body.forEach((seg, i) => {
+                    let size = i === 0 ? 12 : 10;
+                    ctx.beginPath(); ctx.arc(seg.x, seg.y, size, 0, Math.PI*2); ctx.fill();
+                });
+                ctx.fillStyle = "white";
+                ctx.font = "bold 14px Arial";
+                ctx.fillText(p.name, p.body[0].x - 20, p.body[0].y - 20);
+            });
+
+            ctx.restore();
+
+            // Update UI
+            if (world.players[socket.id]) document.getElementById('score').innerText = world.players[socket.id].score;
+            
+            let lb = Object.values(world.players).sort((a,b) => b.score - a.score).slice(0,5);
+            document.getElementById('leaderboard').innerHTML = "<b>LEADERBOARD</b><br>" + 
+                lb.map((p, i) => `${i+1}. ${p.name}: ${Math.floor(p.score)}`).join("<br>");
+
+            // Send movement
+            const angle = Math.atan2(mousePos.y - canvas.height/2, mousePos.x - canvas.width/2);
+            socket.emit('move', { angle, boosting });
+        }
+
+        drawMiniMap();
+        requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('mousemove', e => { mousePos = {x: e.clientX, y: e.clientY}; });
+    window.addEventListener('mousedown', () => boosting = true);
+    window.addEventListener('mouseup', () => boosting = false);
+    loop();
+</script>
+</body>
+</html>
